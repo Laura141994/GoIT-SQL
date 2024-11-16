@@ -1,0 +1,112 @@
+--Sarcina 1--
+
+SELECT 
+timestamp_micros(event_timestamp) as event_date,
+user_pseudo_id,
+(select value.int_value from e.event_params where key = 'ga_session_id') as session_id,
+event_name,
+geo.country as country ,
+device.category,
+traffic_source.source as source,
+traffic_source.medium as medium,
+traffic_source.name as campaign
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_20210131`
+where extract(year from timestamp_micros(event_timestamp))=2021
+and event_name in(
+'sesion_start',
+'view_item',
+'add_to_cart',
+'begin_checkout',
+'add_shipping_info',
+'add_payment_info',
+'purchase'
+);
+
+--Sarcina 2--
+SELECT 
+date(timestamp_micros(event_timestamp)) as event_date,
+traffic_source.source as source,
+traffic_source.medium as medium,
+traffic_source.name as campaign,
+count(distinct concat(user_pseudo_id,session.value.int_value)) as user_session_count,
+countif(event_name='add_to_cart') as visit_to_cart,
+countif(event_name='begin_checkout') as visit_to_checkout,
+countif(event_name='purchase') as visit_to_purchase,
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
+LEFT JOIN UNNEST(event_params) AS session
+ON session.key = 'ga_session_id'
+group by event_date,medium,source,campaign
+limit 1000;
+
+--Sarcina 3--
+with session_start_events as(
+  select timestamp_micros(event_timestamp) as event_date,user_pseudo_id,event_bundle_sequence_id,
+  regexp_replace(
+  regexp_replace(
+    (
+      select
+        p.value.string_value
+      from
+        unnest(event.event_params) as p
+      where
+        p.key = 'page_location'
+    ),
+    r'^https?://[^/]+',
+    ''
+  ),
+  r'[\?].*',
+  ''
+) as page_path,
+  CAST(session.value.int_value AS STRING) AS session_id,
+  from `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` as event
+  left join
+  UNNEST(event.event_params) AS session ON session.key = 'ga_session_id'
+  LEFT JOIN
+    UNNEST(event.event_params) AS page ON page.key = 'page_location'
+  where extract(year from timestamp_micros(event_timestamp))=2020
+and event_name='session_start'
+),
+purchases AS (
+  -- Extrage evenimentele de achiziție din 2020--
+  SELECT
+    user_pseudo_id,
+    CAST(session.value.int_value AS STRING) AS session_id
+  FROM
+    `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*` AS event
+  LEFT JOIN
+    UNNEST(event.event_params) AS session ON session.key = 'ga_session_id'
+  where extract(year from timestamp_micros(event_timestamp))=2020
+and event_name='purchase'
+),
+session_data AS (
+  -- Combină datele de sesiune de pornire și de achiziții pentru a calcula conversia
+  SELECT
+    s.page_path,
+    s.user_pseudo_id,
+    COUNT(DISTINCT s.session_id) AS unique_sessions_per_user,
+    COUNT(DISTINCT p.session_id) AS purchases,
+    -- Conversia este calculată ca număr de sesiuni cu achiziții / sesiuni totale
+    SAFE_DIVIDE(COUNT(DISTINCT p.session_id), COUNT(DISTINCT s.session_id)) AS conversion_rate
+  FROM
+    session_start_events AS s
+  LEFT JOIN
+    purchases AS p ON s.session_id = p.session_id
+  GROUP BY
+    s.page_path, s.user_pseudo_id
+)
+-- Sumarizează datele pe pagină unică de pornire a sesiunii
+SELECT
+  page_path,
+  SUM(unique_sessions_per_user) AS total_unique_sessions,
+  SUM(purchases) AS total_purchases,
+  SAFE_DIVIDE(SUM(purchases), SUM(unique_sessions_per_user)) AS overall_conversion_rate
+FROM
+  session_data
+GROUP BY
+  page_path
+ORDER BY
+  total_unique_sessions DESC
+  limit 1000;
+
+  select * 
+  from `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`

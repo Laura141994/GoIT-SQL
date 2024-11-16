@@ -1,0 +1,56 @@
+with comb AS (
+    SELECT 
+        fb.ad_date,
+        fc.campaign_name,
+        fb.spend,
+        fb.impressions,
+        fb.reach,
+        fb.clicks,
+        fb.leads,
+        fb.value,
+        fb.url_parameters,
+        fa.adset_id
+    FROM
+        public.facebook_ads_basic_daily AS fb
+    LEFT JOIN
+        facebook_adset AS fa ON fb.adset_id = fa.adset_id
+    LEFT JOIN 
+        facebook_campaign AS fc ON fb.campaign_id = fc.campaign_id
+    
+    UNION ALL 
+    
+    SELECT 
+        g.ad_date,
+        g.campaign_name,
+        g.spend,
+        g.impressions,
+        g.reach,
+        g.clicks,
+        g.leads,
+        g.value,
+        g.url_parameters,
+        NULL AS adset_id
+    FROM 
+        public.google_ads_basic_daily AS g
+) 
+SELECT
+    ad_date,
+    campaign_name,
+    SUM(spend) AS spend,
+    SUM(impressions) AS impressions,
+    SUM(reach) AS reach,
+    SUM(clicks) AS clicks,
+    SUM(leads) AS leads,
+    SUM(value) AS value,   
+case
+	WHEN utm_campaign='nan'then null
+	else
+	utm_campaign end 
+FROM 
+    comb
+GROUP BY 
+    ad_date, 
+    campaign_name,
+    url_parameters 
+ORDER BY 
+    ad_date;
